@@ -1,7 +1,7 @@
 substitutions:
   # Telegram налаштування
-  tg_token: "8557912912:AAEqFJgfhbxhhixkjhccyAnPfTv8ilbHBwDKC9scugYA"
-  tg_chat_id: "1111111111"
+  tg_token: "token"
+  tg_chat_id: "chat_id"
   # Wi-Fi налаштування
   wifi_ssid: "wwwww"
   wifi_password: "4444444"
