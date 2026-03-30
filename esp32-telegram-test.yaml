@@ -1,0 +1,132 @@
+substitutions:
+  # Telegram налаштування
+  tg_token: "8557912912:AAEqF4Y0Iz3yAnPfTv8ilbHBwDKC9scugYA"
+  tg_chat_id: "332745878"
+  # Wi-Fi налаштування
+  wifi_ssid: "WabcoPAOffice"
+  wifi_password: "P8Zgz6SF"
+
+esphome:
+  name: esp32-telegram-test
+  friendly_name: esp32 telegram test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+# Дозволяємо логування з інших потоків (важливо для tg_task)
+  level: DEBUG
+
+http_request:
+  useragent: esphome/esp32-telegram-test
+  verify_ssl: false
+  timeout: 10s
+
+web_server:
+  port: 80
+    
+api:
+  reboot_timeout: 0s
+    
+ota:
+  - platform: esphome
+  - platform: web_server
+    
+wifi:
+  networks:
+    - ssid: "${wifi_ssid}"
+      password: "${wifi_password}"
+  power_save_mode: none
+  reboot_timeout: 0s
+  min_auth_mode: WPA2
+    
+
+  ap:
+    ssid: "Esp32-Telegram-Test"
+
+light:
+  - platform:  status_led
+    pin: 2
+    name: "Status led"
+
+button:
+  - platform: template
+    name: "Send Message"
+    on_press:
+
+      - lambda: |-
+          static bool is_processing = false;
+          if (is_processing) {
+            ESP_LOGW("main", "Telegram transfer in progress, skipping...");
+            return;
+          }
+
+          is_processing = true;
+          // Пріоритет 1 (нижче за основний цикл), щоб не блокувати API (errno 128)
+          xTaskCreate([](void* arg){
+            id(send_tg_msg).execute();
+            delay(500); 
+            *((bool*)arg) = false;
+            vTaskDelete(NULL);
+          }, "tg_task", 12288, &is_processing, 1, NULL);
+
+
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    name: "ESP32 Send Message Button"
+    on_press:
+
+      - lambda: |-
+          static bool is_processing = false;
+          if (is_processing) {
+            ESP_LOGW("main", "Telegram transfer in progress, skipping...");
+            return;
+          }
+
+          is_processing = true;
+          // Пріоритет 1 (нижче за основний цикл), щоб не блокувати API (errno 128)
+          xTaskCreate([](void* arg){
+            id(send_tg_msg).execute();
+            delay(500); 
+            *((bool*)arg) = false;
+            vTaskDelete(NULL);
+          }, "tg_task", 12288, &is_processing, 1, NULL);
+
+script:
+  - id: send_tg_msg
+    mode: parallel
+    then:
+      - http_request.post:
+          # Використовуємо ${tg_token} у посиланні
+          url: !lambda |-
+            return "https://api.telegram.org/bot${tg_token}/sendMessage";
+          request_headers:
+            Content-Type: application/json
+          json:
+            # Використовуємо ${tg_chat_id} тут
+            chat_id: "${tg_chat_id}"
+            text: !lambda |-
+              std::string message = "🚀 *ESP32 Status Update*\n\n";
+              message += "📶 **Network:** " + id(my_ssid).state + "\n";
+              message += "🌐 **IP:** `" + id(my_ip).state + "`\n";
+              message += "🔘 *Action:* Button Pressed";
+              return message;
+            parse_mode: "Markdown"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "ESP32 IP Address"
+      id: my_ip 
+    ssid:
+      name: "SSID"
+      id: my_ssid
