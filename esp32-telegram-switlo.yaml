@@ -1,10 +1,10 @@
 substitutions:
   # Telegram налаштування
-  tg_token: "8557912912:AAEqF4Y0Iz3yAnPfTv8ilbHBwDKC9scugYA"
-  tg_chat_id: "332745878"
+  tg_token: "token"
+  tg_chat_id: "chat_id"
   # Wi-Fi налаштування
-  wifi_ssid: "WabcoPAOffice"
-  wifi_password: "P8Zgz6SF"
+  wifi_ssid: "wwwww"
+  wifi_password: "4444444"
 
 esphome:
   name: esp32-telegram-test
@@ -35,11 +35,12 @@ ota:
   - platform: web_server
     
 wifi:
+  networks:
+    - ssid: "${wifi_ssid}"
+      password: "${wifi_password}"
+  power_save_mode: none
+  reboot_timeout: 0s
   min_auth_mode: WPA2
-  ssid: WabcoPA
-  password: P8Zgz6SF 
-  fast_connect: true
-  use_address: 192.168.51.188
     
 
   ap:
