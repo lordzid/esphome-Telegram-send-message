@@ -1,0 +1,232 @@
+substitutions:
+  # Telegram налаштування
+  tg_token: "8557912912:AAEqF4Y0Iz3yAnPfTv8ilbHBwDKC9scugYA"
+  tg_chat_id: "332745878"
+  # Wi-Fi налаштування
+  wifi_ssid: "WabcoPAOffice"
+  wifi_password: "P8Zgz6SF"
+
+esphome:
+  name: esp32-telegram-test
+  friendly_name: esp32 telegram test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+# Дозволяємо логування з інших потоків (важливо для tg_task)
+  level: DEBUG
+
+http_request:
+  useragent: esphome/esp32-telegram-test
+  verify_ssl: false
+  timeout: 10s
+
+web_server:
+  port: 80
+    
+api:
+  reboot_timeout: 0s
+    
+ota:
+  - platform: esphome
+  - platform: web_server
+    
+wifi:
+  min_auth_mode: WPA2
+  ssid: WabcoPA
+  password: P8Zgz6SF 
+  fast_connect: true
+  use_address: 192.168.51.188
+    
+
+  ap:
+    ssid: "Esp32-Telegram-Test"
+
+light:
+  - platform:  status_led
+    pin: 2
+    name: "Status led"
+
+
+globals:
+  - id: power_off_time
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+# 2. Додаємо синхронізацію часу
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "EET-2EEST,M3.5.0/3,M10.5.0/4"
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 0 # Або 13, залежно від підключення
+      inverted: true
+      mode: {input: true, pullup: true}
+    name: "Electricity Sensor"
+    # Додаємо фільтр, щоб не було Code 400 через брязкіт контактів
+    filters:
+      - delayed_on: 500ms
+      - delayed_off: 500ms
+    on_press: # Світло З'ЯВИЛОСЯ
+      then:
+        - lambda: |-
+            static bool is_processing_on = false;
+            if (is_processing_on) return;
+            is_processing_on = true;
+            xTaskCreate([](void* arg){
+              id(send_tg_on).execute();
+              delay(500); 
+              *((bool*)arg) = false;
+              vTaskDelete(NULL);
+            }, "tg_on", 12288, &is_processing_on, 1, NULL);
+    on_release: # Світло ЗНИКЛО
+      then:
+        - globals.set:
+            id: power_off_time
+            value: !lambda "return id(sntp_time).now().timestamp;"
+        - lambda: |-
+            static bool is_processing_off = false;
+            if (is_processing_off) return;
+            is_processing_off = true;
+            xTaskCreate([](void* arg){
+              id(send_tg_off).execute();
+              delay(500); 
+              *((bool*)arg) = false;
+              vTaskDelete(NULL);
+            }, "tg_off", 12288, &is_processing_off, 1, NULL);
+
+script:
+  - id: send_tg_on
+    mode: parallel
+    then:
+      - http_request.post:
+          url: !lambda 'return "https://api.telegram.org/bot${tg_token}/sendMessage";'
+          request_headers:
+            Content-Type: application/json
+          body: !lambda |-
+            char buf[300];
+            auto now = id(sntp_time).now();
+            std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
+            std::string duration_str = "";
+
+            // Рахуємо тривалість, якщо час валідний і був запис про відключення
+            if (id(power_off_time) > 0 && now.is_valid()) {
+              int diff = now.timestamp - id(power_off_time);
+              int h = diff / 3600;
+              int m = (diff % 3600) / 60;
+              int s = diff % 60;
+              char d_buf[50];
+              sprintf(d_buf, "\\n⏳ Була відсутня: %02d:%02d:%02d", h, m, s);
+              duration_str = d_buf;
+            }
+
+            snprintf(buf, sizeof(buf), 
+              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🟢 <b>Електрика відновлена!</b>%s\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
+              duration_str.c_str(), timestamp.c_str());
+            return (std::string)buf;
+
+  - id: send_tg_off
+    mode: parallel
+    then:
+      - http_request.post:
+          url: !lambda 'return "https://api.telegram.org/bot${tg_token}/sendMessage";'
+          request_headers:
+            Content-Type: application/json
+          body: !lambda |-
+            char buf[256];
+            auto now = id(sntp_time).now();
+            std::string timestamp = now.is_valid() ? now.strftime("%H:%M:%S") : "невідомо";
+
+            snprintf(buf, sizeof(buf), 
+              "{\"chat_id\": \"${tg_chat_id}\", \"text\": \"🔴 <b>Електрика відключена!</b>\\n🕒 Час: %s\", \"parse_mode\": \"HTML\"}", 
+              timestamp.c_str());
+            return (std::string)buf;
+
+# button:
+#   - platform: template
+#     name: "Send Message"
+#     on_press:
+
+#       - lambda: |-
+#           static bool is_processing = false;
+#           if (is_processing) {
+#             ESP_LOGW("main", "Telegram transfer in progress, skipping...");
+#             return;
+#           }
+
+#           is_processing = true;
+#           // Пріоритет 1 (нижче за основний цикл), щоб не блокувати API (errno 128)
+#           xTaskCreate([](void* arg){
+#             id(send_tg_msg).execute();
+#             delay(500); 
+#             *((bool*)arg) = false;
+#             vTaskDelete(NULL);
+#           }, "tg_task", 12288, &is_processing, 1, NULL);
+
+
+# binary_sensor:
+#   - platform: gpio
+#     pin:
+#       number: 0
+#       inverted: true
+#       mode:
+#         input: true
+#         pullup: true
+#     name: "ESP32 Send Message Button"
+#     on_press:
+
+#       - lambda: |-
+#           static bool is_processing = false;
+#           if (is_processing) {
+#             ESP_LOGW("main", "Telegram transfer in progress, skipping...");
+#             return;
+#           }
+
+#           is_processing = true;
+#           // Пріоритет 1 (нижче за основний цикл), щоб не блокувати API (errno 128)
+#           xTaskCreate([](void* arg){
+#             id(send_tg_msg).execute();
+#             delay(500); 
+#             *((bool*)arg) = false;
+#             vTaskDelete(NULL);
+#           }, "tg_task", 12288, &is_processing, 1, NULL);
+
+# script:
+#   - id: send_tg_msg
+#     mode: parallel
+#     then:
+#       - http_request.post:
+#           # Використовуємо ${tg_token} у посиланні
+#           url: !lambda |-
+#             return "https://api.telegram.org/bot${tg_token}/sendMessage";
+#           request_headers:
+#             Content-Type: application/json
+#           json:
+#             # Використовуємо ${tg_chat_id} тут
+#             chat_id: "${tg_chat_id}"
+#             text: !lambda |-
+#               std::string message = "🚀 *ESP32 Status Update*\n\n";
+#               message += "📶 **Network:** " + id(my_ssid).state + "\n";
+#               message += "🌐 **IP:** `" + id(my_ip).state + "`\n";
+#               message += "🔘 *Action:* Button Pressed";
+#               return message;
+#             parse_mode: "Markdown"
+
+
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "ESP32 IP Address"
+      id: my_ip 
+    ssid:
+      name: "SSID"
+      id: my_ssid
+
